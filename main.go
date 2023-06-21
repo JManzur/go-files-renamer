@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -97,8 +98,14 @@ func main() {
 			// Get the original file permissions
 			oldPermissions := file.Mode().String()
 
+			// Get the original file ownership
+			oldUID, oldGID, err := getFileOwnership(file)
+			if err != nil {
+				log.Printf("Failed to retrieve ownership for file: %s", oldPath)
+			}
+
 			// Rename the file to lowercase
-			err := os.Rename(oldPath, newPath)
+			err = os.Rename(oldPath, newPath)
 			if err != nil {
 				log.Printf("Failed to rename file: %s", oldPath)
 			} else {
@@ -110,14 +117,16 @@ func main() {
 				}
 				newPermissions := newFile.Mode().String()
 
+				// Set the file ownership
+				err = setFileOwnership(newPath, oldUID, oldGID)
+				if err != nil {
+					log.Printf("Failed to set ownership for file: %s", newPath)
+				}
+
 				// Log the file renaming and permissions
 				log.Printf("Renamed file: %s to %s", oldPath, newPath)
 				log.Printf("File: %s - Permissions - Before: %s, After: %s", newPath, oldPermissions, newPermissions)
-
-				// Restore the original permissions
-				if err := os.Chmod(newPath, file.Mode()); err != nil {
-					log.Printf("Failed to restore permissions for file: %s", newPath)
-				}
+				log.Printf("File: %s - Ownership - UID: %d, GID: %d", newPath, oldUID, oldGID)
 			}
 		}(file)
 	}
@@ -126,4 +135,21 @@ func main() {
 	wg.Wait()
 
 	log.Println("All files renamed to lowercase.")
+}
+
+// getFileOwnership returns the user ID (UID) and group ID (GID) of a file
+func getFileOwnership(file os.FileInfo) (uint32, uint32, error) {
+	fileSys := file.Sys()
+	if stat, ok := fileSys.(*syscall.Stat_t); ok {
+		return stat.Uid, stat.Gid, nil
+	}
+	return 0, 0, fmt.Errorf("failed to retrieve file ownership")
+}
+
+// setFileOwnership sets the user ID (UID) and group ID (GID) of a file
+func setFileOwnership(file string, uid, gid uint32) error {
+	if err := os.Lchown(file, int(uid), int(gid)); err != nil {
+		return err
+	}
+	return nil
 }
