@@ -3,32 +3,43 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"log"
+	"os"
 	"path/filepath"
-	"strings"
+	"regexp"
 )
 
 func main() {
-	var dir string
-	flag.StringVar(&dir, "dir", ".", "directory path")
+	dir := flag.String("dir", ".", "the root directory to search")
+	verbose := flag.Bool("v", false, "enable verbose output")
 	flag.Parse()
 
-	listSubdirs(dir, 0)
-}
+	re := regexp.MustCompile(`[A-Z]`)
 
-func listSubdirs(dir string, indent int) {
-	files, err := ioutil.ReadDir(dir)
+	file, err := os.Create("output.log")
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
-	for _, file := range files {
-		if file.IsDir() && !isHidden(file.Name()) {
-			fmt.Printf("%s%s/\n", strings.Repeat("  ", indent), file.Name())
-			listSubdirs(filepath.Join(dir, file.Name()), indent+1)
-		}
-	}
-}
+	defer file.Close()
 
-func isHidden(name string) bool {
-	return len(name) > 0 && name[0] == '.'
+	logger := log.New(file, "", log.LstdFlags)
+
+	err = filepath.Walk(*dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() && info.Name()[0] == '.' {
+			return filepath.SkipDir
+		}
+		if re.MatchString(info.Name()) {
+			logger.Println(path)
+			if *verbose {
+				fmt.Println(path)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		logger.Println(err)
+	}
 }
