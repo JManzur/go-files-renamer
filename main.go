@@ -4,13 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -64,92 +62,93 @@ func main() {
 	// Create a semaphore with the maximum number of goroutines
 	semaphore := make(chan struct{}, *maxGoroutines)
 
-	// Get a list of files in the folder
-	files, err := ioutil.ReadDir(*folderPath)
+	// Perform the recursive renaming
+	err = renameToLowerCaseRecursive(*folderPath, semaphore)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Create a wait group to ensure all goroutines complete
-	var wg sync.WaitGroup
-	wg.Add(len(files))
-
-	// Iterate over the files and launch goroutines to rename them
-	for _, file := range files {
-		// Acquire a semaphore slot
-		semaphore <- struct{}{}
-
-		go func(file os.FileInfo) {
-			defer func() {
-				// Release the semaphore slot
-				<-semaphore
-				wg.Done()
-			}()
-
-			// Skip directories
-			if file.IsDir() {
-				return
-			}
-
-			// Construct the old and new file paths
-			oldPath := filepath.Join(*folderPath, file.Name())
-			newPath := filepath.Join(*folderPath, strings.ToLower(file.Name()))
-
-			// Get the original file permissions
-			oldPermissions := file.Mode().String()
-
-			// Get the original file ownership
-			oldUID, oldGID, err := getFileOwnership(file)
-			if err != nil {
-				log.Printf("Failed to retrieve ownership for file: %s", oldPath)
-			}
-
-			// Rename the file to lowercase
-			err = os.Rename(oldPath, newPath)
-			if err != nil {
-				log.Printf("Failed to rename file: %s", oldPath)
-			} else {
-				// Get the updated file permissions
-				newFile, err := os.Stat(newPath)
-				if err != nil {
-					log.Printf("Failed to retrieve updated permissions for file: %s", newPath)
-					return
-				}
-				newPermissions := newFile.Mode().String()
-
-				// Set the file ownership
-				err = setFileOwnership(newPath, oldUID, oldGID)
-				if err != nil {
-					log.Printf("Failed to set ownership for file: %s", newPath)
-				}
-
-				// Log the file renaming and permissions
-				log.Printf("Renamed file: %s to %s", oldPath, newPath)
-				log.Printf("File: %s - Permissions - Before: %s, After: %s", newPath, oldPermissions, newPermissions)
-				log.Printf("File: %s - Ownership - UID: %d, GID: %d", newPath, oldUID, oldGID)
-			}
-		}(file)
-	}
-
-	// Wait for all goroutines to complete
-	wg.Wait()
-
-	log.Println("All files renamed to lowercase.")
+	log.Println("All files and folders renamed to lowercase.")
 }
 
-// getFileOwnership returns the user ID (UID) and group ID (GID) of a file
-func getFileOwnership(file os.FileInfo) (uint32, uint32, error) {
-	fileSys := file.Sys()
-	if stat, ok := fileSys.(*syscall.Stat_t); ok {
-		return stat.Uid, stat.Gid, nil
-	}
-	return 0, 0, fmt.Errorf("failed to retrieve file ownership")
-}
+func renameToLowerCaseRecursive(path string, semaphore chan struct{}) error {
+	// Acquire a semaphore slot
+	semaphore <- struct{}{}
+	defer func() {
+		// Release the semaphore slot
+		<-semaphore
+	}()
 
-// setFileOwnership sets the user ID (UID) and group ID (GID) of a file
-func setFileOwnership(file string, uid, gid uint32) error {
-	if err := os.Lchown(file, int(uid), int(gid)); err != nil {
+	// Rename the current folder to lowercase
+	lowerPath := strings.ToLower(path)
+	if path != lowerPath {
+		if err := os.Rename(path, lowerPath); err != nil {
+			return err
+		}
+		log.Printf("Renamed folder: %s to %s", path, lowerPath)
+	}
+
+	// Get a list of files and subfolders in the current folder
+	entries, err := readDir(path)
+	if err != nil {
 		return err
 	}
+
+	// Create a wait group to ensure all goroutines complete
+	var wg sync.WaitGroup
+
+	for _, entry := range entries {
+		entryPath := filepath.Join(path, entry.Name())
+
+		if entry.IsDir() {
+			// If it's a subfolder, recursively rename it
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := renameToLowerCaseRecursive(entryPath, semaphore); err != nil {
+					log.Printf("Error renaming folder: %s", entryPath)
+				}
+			}()
+		} else {
+			// If it's a file, rename it to lowercase
+			lowerEntryPath := filepath.Join(path, strings.ToLower(entry.Name()))
+			if entryPath != lowerEntryPath {
+				if err := os.Rename(entryPath, lowerEntryPath); err != nil {
+					log.Printf("Failed to rename file: %s", entryPath)
+				} else {
+					log.Printf("Renamed file: %s to %s", entryPath, lowerEntryPath)
+				}
+			}
+		}
+	}
+
+	// Wait for all subfolder renaming goroutines to complete
+	wg.Wait()
+
 	return nil
+}
+
+// readDir is a replacement for ioutil.ReadDir
+func readDir(dirname string) ([]os.FileInfo, error) {
+	file, err := os.Open(dirname)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	names, err := file.Readdirnames(-1)
+	if err != nil {
+		return nil, err
+	}
+
+	var list []os.FileInfo
+	for _, name := range names {
+		info, err := os.Stat(filepath.Join(dirname, name))
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, info)
+	}
+
+	return list, nil
 }
