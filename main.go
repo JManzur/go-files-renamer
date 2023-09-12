@@ -62,16 +62,16 @@ func main() {
 	// Create a semaphore with the maximum number of goroutines
 	semaphore := make(chan struct{}, *maxGoroutines)
 
-	// Perform the recursive renaming
-	err = renameToLowerCaseRecursive(*folderPath, semaphore)
+	// Perform the recursive renaming starting from the specified folder path
+	err = renameToLowerCaseRecursive(*folderPath, *folderPath, semaphore)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	log.Println("All files and folders renamed to lowercase.")
+	log.Println("All files and folders under the specified folder path renamed to lowercase.")
 }
 
-func renameToLowerCaseRecursive(path string, semaphore chan struct{}) error {
+func renameToLowerCaseRecursive(rootPath, currentPath string, semaphore chan struct{}) error {
 	// Acquire a semaphore slot
 	semaphore <- struct{}{}
 	defer func() {
@@ -80,16 +80,16 @@ func renameToLowerCaseRecursive(path string, semaphore chan struct{}) error {
 	}()
 
 	// Rename the current folder to lowercase
-	lowerPath := strings.ToLower(path)
-	if path != lowerPath {
-		if err := os.Rename(path, lowerPath); err != nil {
+	lowerPath := filepath.Join(rootPath, strings.ToLower(currentPath[len(rootPath):]))
+	if currentPath != lowerPath {
+		if err := os.Rename(currentPath, lowerPath); err != nil {
 			return err
 		}
-		log.Printf("Renamed folder: %s to %s", path, lowerPath)
+		log.Printf("Renamed folder: %s to %s", currentPath, lowerPath)
 	}
 
 	// Get a list of files and subfolders in the current folder
-	entries, err := readDir(path)
+	entries, err := readDir(currentPath)
 	if err != nil {
 		return err
 	}
@@ -98,20 +98,20 @@ func renameToLowerCaseRecursive(path string, semaphore chan struct{}) error {
 	var wg sync.WaitGroup
 
 	for _, entry := range entries {
-		entryPath := filepath.Join(path, entry.Name())
+		entryPath := filepath.Join(currentPath, entry.Name())
 
 		if entry.IsDir() {
 			// If it's a subfolder, recursively rename it
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if err := renameToLowerCaseRecursive(entryPath, semaphore); err != nil {
+				if err := renameToLowerCaseRecursive(rootPath, entryPath, semaphore); err != nil {
 					log.Printf("Error renaming folder: %s", entryPath)
 				}
 			}()
 		} else {
 			// If it's a file, rename it to lowercase
-			lowerEntryPath := filepath.Join(path, strings.ToLower(entry.Name()))
+			lowerEntryPath := filepath.Join(currentPath, strings.ToLower(entry.Name()))
 			if entryPath != lowerEntryPath {
 				if err := os.Rename(entryPath, lowerEntryPath); err != nil {
 					log.Printf("Failed to rename file: %s", entryPath)

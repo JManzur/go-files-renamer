@@ -25,11 +25,11 @@ Verbose mode:
 
 Limit the number of simultaneous goroutines:
 ```bash
-./go-files-renamer -folder /path/to/files -maxGoroutines 100
+./go-files-renamer -folder /path/to/files -max-goroutines 100
 ```
 
 Send logs to a different path:
 ```bash
-./go-files-renamer -folder /path/to/files -logFilePath /path/to/logs
+./go-files-renamer -folder /path/to/files -log-file /path/to/logs
 ```
 
